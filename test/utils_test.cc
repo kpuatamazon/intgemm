@@ -34,5 +34,24 @@ TEST_CASE("Expi (positive)",) {
   CHECK_EPS(expi(10), 22026.4657948067165170, eps);
 }
 
+template <Index N>
+struct TestCompileTimeLoop : CompileTimeLoop<N, TestCompileTimeLoop> {
+  static void body(Index& result) {
+    result >>= 1;
+  }
+};
+
+TEST_CASE("Compile-time loop (N = 1)",) {
+  Index result = 128;
+  TestCompileTimeLoop<1>::run(result);
+  CHECK(result == 64);
+}
+
+TEST_CASE("Compile-time loop (N = 7)",) {
+  Index result = 128;
+  TestCompileTimeLoop<7>::run(result);
+  CHECK(result == 1);
+}
+
 }
 }

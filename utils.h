@@ -69,4 +69,50 @@ constexpr double expi(int n) {
   return (n >= 0 ? expi_nonnegative(n) : 1.0 / expi_nonnegative(-n));
 }
 
+/*
+ * Compile-time loop over range 0-N (exclusive).
+ *
+ * To use it, you need to create a struct inheriting from CompileTimeLoop and
+ * containing static procedure 'body'. To run loop, just call static function
+ * 'run' of you struct with parameters that are expected by 'body' function.
+ *
+ * Example of creating loop:
+ *
+ *   template <Index N>
+ *   struct TestCompileTimeLoop : CompileTimeLoop<N, TestCompileTimeLoop> {
+ *     static void body(const char* text) {
+ *       std::cout << text << " " << N << std::endl;
+ *     }
+ *   };
+ *
+ * Example of running loop:
+ *
+ *   TestCompileTimeLoop<5>::run("Test");
+ *
+ * Output of the example:
+ *
+ *  Test 0
+ *  Test 1
+ *  Test 2
+ *  Test 3
+ *  Test 4
+ *
+ */
+template <Index N, template <Index> class Body>
+struct CompileTimeLoop {
+  template <typename... Args>
+  static void run(Args&&... args) {
+    CompileTimeLoop<N-1, Body>::run(std::forward<Args>(args)...);
+    Body<N-1>::body(std::forward<Args>(args)...);
+  }
+};
+
+template <template <Index> class Body>
+struct CompileTimeLoop<1, Body> {
+  template <typename... Args>
+  static void run(Args&&... args) {
+    Body<0>::body(std::forward<Args>(args)...);
+  }
+};
+
 }
