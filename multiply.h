@@ -492,9 +492,22 @@ INTGEMM_SSSE3 inline static void InnerINTGEMM_SSSE3(
   sum6 = adds_epi16(sum6, maddubs_epi16(a_positive, sign_epi8(b[6], a)));
   sum7 = adds_epi16(sum7, maddubs_epi16(a_positive, sign_epi8(b[7], a)));
 }
+
+template <Index N>
+struct InnerCTL : CompileTimeLoop<N, InnerCTL> {
+  INTGEMM_SSSE3 static void body(const __m128i** a, const __m128i* b, __m128i* sums0, __m128i* sums1, __m128i* sums2, __m128i* sums3, __m128i* sums4, __m128i* sums5, __m128i* sums6, __m128i* sums7) {
+    InnerINTGEMM_SSSE3(*a[N], b, sums0[N], sums1[N], sums2[N], sums3[N], sums4[N], sums5[N], sums6[N], sums7[N]);
+    ++a[N];
+  }
+  INTGEMM_AVX2 static void body(const __m256i** a, const __m256i* b, __m256i* sums0, __m256i* sums1, __m256i* sums2, __m256i* sums3, __m256i* sums4, __m256i* sums5, __m256i* sums6, __m256i* sums7) {
+    InnerINTGEMM_AVX2(*a[N], b, sums0[N], sums1[N], sums2[N], sums3[N], sums4[N], sums5[N], sums6[N], sums7[N]);
+    ++a[N];
+  }
+};
+
 //INTGEMM_AVX2 or INTGEMM_SSSE3 multiply
 #define INTGEMM_MULTIPLY8(Integer, target, cpu_type) \
-  template <typename Callback> target static void Multiply(const int8_t *A, const int8_t *B, Index A_rows, Index width, Index B_cols, Callback callback) { \
+  template <typename Callback, Index TileRows = 8> target static void Multiply(const int8_t *A, const int8_t *B, Index A_rows, Index width, Index B_cols, Callback callback) { \
   assert(width % sizeof(Integer) == 0); \
   assert(B_cols % 8 == 0); \
   assert(reinterpret_cast<uintptr_t>(A) % sizeof(Integer) == 0); \
@@ -505,27 +518,33 @@ INTGEMM_SSSE3 inline static void InnerINTGEMM_SSSE3(
   /*Go over 8 columns of B at a time.*/ \
   for (Index B0_colidx = 0; B0_colidx != B_cols; B0_col += 8 * simd_width, B0_colidx += 8) { \
     /*Process one row of A at a time.  Doesn't seem to be faster to do multiple rows of A at once.*/ \
-    for (Index A_rowidx = 0; A_rowidx < A_rows; ++A_rowidx) { \
+    for (Index A_rowidx = 0; A_rowidx < A_rows; A_rowidx += TileRows) { \
       /*Iterate over shared (inner) dimension.*/ \
-      const Integer *A_live = reinterpret_cast<const Integer *>(A + A_rowidx * width); \
-      const Integer *A_end = A_live + simd_width; \
+      const Integer *A_lives[TileRows]; \
       const Integer *B_live = B0_col; \
-      /* Rather than initializing as zeros and adding, just initialize the first.*/ \
-      Integer a = *(A_live++); \
-      Integer a_positive = abs_epi8(a); \
-      /* These will be packed 16-bit integers containing sums for each column of B multiplied by the row of A.*/ \
-      Integer sum0 = maddubs_epi16(a_positive, sign_epi8(B_live[0], a)); \
-      Integer sum1 = maddubs_epi16(a_positive, sign_epi8(B_live[1], a)); \
-      Integer sum2 = maddubs_epi16(a_positive, sign_epi8(B_live[2], a)); \
-      Integer sum3 = maddubs_epi16(a_positive, sign_epi8(B_live[3], a)); \
-      Integer sum4 = maddubs_epi16(a_positive, sign_epi8(B_live[4], a)); \
-      Integer sum5 = maddubs_epi16(a_positive, sign_epi8(B_live[5], a)); \
-      Integer sum6 = maddubs_epi16(a_positive, sign_epi8(B_live[6], a)); \
-      Integer sum7 = maddubs_epi16(a_positive, sign_epi8(B_live[7], a)); \
-      B_live += 8; \
+      Integer sums0[TileRows]; \
+      Integer sums1[TileRows]; \
+      Integer sums2[TileRows]; \
+      Integer sums3[TileRows]; \
+      Integer sums4[TileRows]; \
+      Integer sums5[TileRows]; \
+      Integer sums6[TileRows]; \
+      Integer sums7[TileRows]; \
+      for (Index i = 0; i < TileRows; ++i) { \
+        A_lives[i] = reinterpret_cast<const Integer *>(A + (A_rowidx + i) * width); \
+        sums0[i] = set1_epi8<Integer>(0); \
+        sums1[i] = set1_epi8<Integer>(0); \
+        sums2[i] = set1_epi8<Integer>(0); \
+        sums3[i] = set1_epi8<Integer>(0); \
+        sums4[i] = set1_epi8<Integer>(0); \
+        sums5[i] = set1_epi8<Integer>(0); \
+        sums6[i] = set1_epi8<Integer>(0); \
+        sums7[i] = set1_epi8<Integer>(0); \
+      } \
+      const Integer *A_end0 = A_lives[0] + simd_width; \
       /* Use A as the loop variable so the add can be done where gcc likes it for branch prediction.*/ \
-      for (; A_live != A_end; ++A_live, B_live += 8) { \
-        Inner##target(*A_live, B_live, sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7); \
+      for (; A_lives[0] != A_end0; B_live += 8) { \
+        InnerCTL<TileRows>::run(&A_lives[0], B_live, &sums0[0], &sums1[0], &sums2[0], &sums3[0], &sums4[0], &sums5[0], &sums6[0], &sums7[0]); \
       } \
       /* Convert 16-bit to 32-bit and add, not caring what parts are added.
        * Implementations:
@@ -545,18 +564,20 @@ INTGEMM_SSSE3 inline static void InnerINTGEMM_SSSE3(
        *      _mm512_srai_epi32(sum, 16));
        */ \
       Integer ones = set1_epi16<Integer>(1); \
-      sum0 = madd_epi16(sum0, ones); \
-      sum1 = madd_epi16(sum1, ones); \
-      sum2 = madd_epi16(sum2, ones); \
-      sum3 = madd_epi16(sum3, ones); \
-      sum4 = madd_epi16(sum4, ones); \
-      sum5 = madd_epi16(sum5, ones); \
-      sum6 = madd_epi16(sum6, ones); \
-      sum7 = madd_epi16(sum7, ones); \
-      Integer pack0123 = Pack0123(sum0, sum1, sum2, sum3); \
-      Integer pack4567 = Pack0123(sum4, sum5, sum6, sum7); \
-      auto total = PermuteSummer(pack0123, pack4567); \
-      RunCallback(callback_impl, total, A_rowidx, B0_colidx, A_rows, B_cols); \
+      for (Index i = 0; i < TileRows; ++i) { \
+        sums0[i] = madd_epi16(sums0[i], ones); \
+        sums1[i] = madd_epi16(sums1[i], ones); \
+        sums2[i] = madd_epi16(sums2[i], ones); \
+        sums3[i] = madd_epi16(sums3[i], ones); \
+        sums4[i] = madd_epi16(sums4[i], ones); \
+        sums5[i] = madd_epi16(sums5[i], ones); \
+        sums6[i] = madd_epi16(sums6[i], ones); \
+        sums7[i] = madd_epi16(sums7[i], ones); \
+        Integer pack0123 = Pack0123(sums0[i], sums1[i], sums2[i], sums3[i]); \
+        Integer pack4567 = Pack0123(sums4[i], sums5[i], sums6[i], sums7[i]); \
+        auto total = PermuteSummer(pack0123, pack4567); \
+        RunCallback(callback_impl, total, A_rowidx + i, B0_colidx, A_rows, B_cols); \
+      } \
     } \
   } \
 } \
